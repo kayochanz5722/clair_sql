@@ -1,38 +1,55 @@
--- Исправление проблемы с материализованным представлением chat_stats
--- Удаляем проблемные триггеры и материализованное представление
+-- Оптимизация производительности чатов - только индексы
+-- Этот скрипт создает только индексы без функций PostgreSQL
 
--- Удаляем триггеры, которые вызывают проблемы
-DROP TRIGGER IF EXISTS trigger_update_chat_stats_insert ON chat_messages;
-DROP TRIGGER IF EXISTS trigger_update_chat_stats_update ON chat_messages;
-DROP TRIGGER IF EXISTS trigger_update_chat_stats_delete ON chat_messages;
+-- Индекс для быстрого поиска сообщений по chat_id и created_at
+-- Это критически важно для пагинации сообщений
+CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_created 
+ON chat_messages (chat_id, created_at DESC);
 
--- Удаляем функции триггеров
-DROP FUNCTION IF EXISTS update_chat_stats_on_message_change();
+-- Индекс для быстрого поиска непрочитанных сообщений
+CREATE INDEX IF NOT EXISTS idx_chat_messages_unread 
+ON chat_messages (chat_id, sender_id, is_read) 
+WHERE is_read = false;
 
--- Удаляем материализованное представление
-DROP MATERIALIZED VIEW IF EXISTS chat_stats;
+-- Индекс для быстрого поиска чатов пользователя
+CREATE INDEX IF NOT EXISTS idx_chats_participant1 
+ON chats (participant1_id, last_message_time DESC);
 
--- Удаляем функцию обновления материализованного представления
-DROP FUNCTION IF EXISTS refresh_chat_stats();
+CREATE INDEX IF NOT EXISTS idx_chats_participant2 
+ON chats (participant2_id, last_message_time DESC);
 
--- Проверяем, что все проблемные объекты удалены
+-- Индекс для быстрого поиска чата между двумя пользователями
+CREATE INDEX IF NOT EXISTS idx_chats_participants 
+ON chats (participant1_id, participant2_id);
+
+-- Индекс для быстрого подсчета сообщений в чате
+CREATE INDEX IF NOT EXISTS idx_chat_messages_count 
+ON chat_messages (chat_id);
+
+-- Анализируем таблицы для обновления статистики
+ANALYZE chats;
+ANALYZE chat_messages;
+
+-- Выводим информацию о созданных индексах
 SELECT 
     schemaname,
     tablename,
-    indexname
+    indexname,
+    indexdef
 FROM pg_indexes 
-WHERE indexname LIKE '%chat_stats%';
+WHERE tablename IN ('chats', 'chat_messages')
+ORDER BY tablename, indexname;
 
-SELECT 
-    schemaname,
-    matviewname
-FROM pg_matviews 
-WHERE matviewname = 'chat_stats';
+-- Проверяем производительность запросов
+EXPLAIN (ANALYZE, BUFFERS) 
+SELECT c.id, c.participant1_id, c.participant2_id, c.participant1_name, c.participant2_name, c.participant1_username, c.participant2_username, c.last_message, c.last_message_time, c.is_read, c.created_at, c.updated_at
+FROM chats c
+WHERE c.participant1_id = '00000000-0000-0000-0000-000000000000'::UUID OR c.participant2_id = '00000000-0000-0000-0000-000000000000'::UUID
+ORDER BY c.last_message_time DESC NULLS LAST, c.updated_at DESC;
 
-SELECT 
-    proname
-FROM pg_proc 
-WHERE proname IN ('update_chat_stats_on_message_change', 'refresh_chat_stats');
-
--- Выводим сообщение об успешном удалении
-SELECT 'Проблемные объекты материализованного представления удалены' as status;
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT id, chat_id, sender_id, sender_name, sender_username, content, created_at, is_read, reply_to_message_id, reply_to_content
+FROM chat_messages 
+WHERE chat_id = '00000000-0000-0000-0000-000000000000'::UUID
+ORDER BY created_at DESC
+LIMIT 50 OFFSET 0;
