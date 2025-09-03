@@ -1,39 +1,58 @@
--- Создание таблицы настроек конфиденциальности пользователей
-CREATE TABLE IF NOT EXISTS user_privacy_settings (
-    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-    show_genres BOOLEAN NOT NULL DEFAULT true,
-    show_profile_stats BOOLEAN NOT NULL DEFAULT true,
-    show_libraries BOOLEAN NOT NULL DEFAULT true,
-    allow_messages_from_all BOOLEAN NOT NULL DEFAULT true,
-    is_profile_hidden BOOLEAN NOT NULL DEFAULT false,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
-);
+-- Исправление функции get_library_posts - версия 2
+-- Этот скрипт нужно выполнить в базе данных
 
--- Создание индекса для быстрого поиска
-CREATE INDEX IF NOT EXISTS idx_user_privacy_settings_user_id ON user_privacy_settings(user_id);
+-- Удаляем старую функцию
+DROP FUNCTION IF EXISTS get_library_posts(UUID, UUID);
 
--- Создание триггера для автоматического обновления updated_at
-CREATE OR REPLACE FUNCTION update_user_privacy_settings_updated_at()
-RETURNS TRIGGER AS $$
+-- Создаем новую функцию с правильным порядком полей
+CREATE OR REPLACE FUNCTION get_library_posts(library_uuid UUID, user_uuid UUID)
+RETURNS TABLE(
+    post_id UUID,
+    author_id UUID,
+    author_name VARCHAR(100),
+    author_username VARCHAR(100),
+    content TEXT,
+    genre VARCHAR(50),
+    hashtags TEXT[],
+    links TEXT[],
+    is_private BOOLEAN,
+    allow_library_addition BOOLEAN,
+    likes_count INTEGER,
+    comments_count INTEGER,
+    created_at TIMESTAMP WITH TIME ZONE,
+    is_liked BOOLEAN,
+    added_to_library_at TIMESTAMP WITH TIME ZONE
+) AS $$
 BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
+    RETURN QUERY
+    SELECT 
+        p.id,
+        p.author_id,
+        p.author_name,
+        p.author_username,
+        p.content,
+        p.genre,
+        p.hashtags,
+        p.links,
+        p.is_private,
+        p.allow_library_addition,
+        p.likes_count,
+        p.comments_count,
+        p.created_at,
+        EXISTS(
+            SELECT 1 FROM post_likes pl 
+            WHERE pl.post_id = p.id AND pl.user_id = user_uuid
+        ) as is_liked,
+        lp.added_at as added_to_library_at
+    FROM library_posts lp
+    JOIN posts p ON lp.post_id = p.id
+    WHERE lp.library_id = library_uuid
+    ORDER BY lp.added_at DESC;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trigger_update_user_privacy_settings_updated_at
-    BEFORE UPDATE ON user_privacy_settings
-    FOR EACH ROW
-    EXECUTE FUNCTION update_user_privacy_settings_updated_at();
+-- Проверяем, что функция создана
+SELECT 'Функция get_library_posts пересоздана успешно' as status;
 
--- Комментарии к таблице и колонкам
-COMMENT ON TABLE user_privacy_settings IS 'Настройки конфиденциальности пользователей';
-COMMENT ON COLUMN user_privacy_settings.user_id IS 'ID пользователя';
-COMMENT ON COLUMN user_privacy_settings.show_genres IS 'Показывать ли жанры пользователя';
-COMMENT ON COLUMN user_privacy_settings.show_profile_stats IS 'Показывать ли статистику профиля';
-COMMENT ON COLUMN user_privacy_settings.show_libraries IS 'Показывать ли библиотеки';
-COMMENT ON COLUMN user_privacy_settings.allow_messages_from_all IS 'Разрешить сообщения от всех пользователей';
-COMMENT ON COLUMN user_privacy_settings.is_profile_hidden IS 'Скрыт ли профиль (доступен только подписчикам)';
-COMMENT ON COLUMN user_privacy_settings.created_at IS 'Дата создания настроек';
-COMMENT ON COLUMN user_privacy_settings.updated_at IS 'Дата последнего обновления настроек';
+-- Тестируем функцию (замените UUID на реальные)
+-- SELECT * FROM get_library_posts('your-library-uuid', 'your-user-uuid') LIMIT 1;
